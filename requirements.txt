@@ -1,0 +1,17 @@
+# Analysis / modelling (what the tests and the offline dry run need)
+numpy
+pandas
+scikit-learn
+matplotlib
+scipy
+joblib
+
+# Data acquisition (Phase 2 only — needed in Colab, not for the offline tests)
+alerce
+lightkurve
+astroquery
+requests
+tqdm
+
+# Development
+pytest
