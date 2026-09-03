@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # Only the analysis stack — the test suite is fully offline, so the Phase 2
+      # acquisition dependencies (alerce, lightkurve, astroquery) are not needed.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas scikit-learn matplotlib scipy joblib pytest ipython
+
+      - name: Scan for committed credentials
+        run: python -m pytest tests/test_no_secrets.py -q
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q
+
+      - name: Verify the notebook matches the modules it is built from
+        run: |
+          python tools/build_notebook.py
+          git diff --exit-code -- notebooks/ \
+            || (echo "::error::notebooks/ is out of date — run tools/build_notebook.py and commit the result" && exit 1)
+
+      - name: Execute the notebook's Phase 3/4 cells offline
+        run: python tools/validate_notebook.py

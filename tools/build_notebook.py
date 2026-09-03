@@ -18,9 +18,11 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The previous notebook is vendored into the repo rather than read from wherever it
+# happened to be uploaded, so the build is reproducible on any machine (CI included)
+# and the provenance of every verbatim-reused cell stays auditable.
 SRC_NB = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-    os.path.expanduser('~'), '.claude/uploads/c7bec563-07d2-5e94-9d66-1a3452f7a568/'
-    'e71a9e68-BTP_TNS_Hierarchical_2.ipynb')
+    ROOT, 'notebooks', 'source', 'BTP_TNS_Hierarchical_2_original.ipynb')
 OUT_NB = os.path.join(ROOT, 'notebooks', 'BTP_TNS_Hierarchical_Balanced.ipynb')
 
 
@@ -116,7 +118,44 @@ unchanged from the previous notebook.
 # ============================================================ PHASE 2
 A(md("# PHASE 2 — Data Acquisition (TNS + ZTF/ALeRCE + TESS)"))
 A(code(orig_src(2)))                       # setup / config / constants  (verbatim)
-A(code(orig_src(3)))                       # TNS credentials             (verbatim)
+# TNS credentials — NOT reused verbatim. The original cell hard-coded a live TNS bot
+# API key, which is a secret and must not sit in a notebook that gets committed or
+# shared. Same interface (TNS_MARKER / TNS_API_KEY / HEADERS), sourced safely.
+A(code("""
+# TNS credentials — read from the environment, never hard-coded.
+#
+# The previous notebook had the bot id and API key written into this cell. Anything
+# committed to git or shared as a notebook carries them along, so they are read at
+# run time instead. In Colab, put them in the Secrets panel (the key icon in the left
+# sidebar) as TNS_BOT_ID, TNS_BOT_NAME and TNS_API_KEY, with notebook access enabled.
+import os
+
+def _get_secret(name, prompt=None):
+    # Colab Secrets first, then the environment, then an interactive prompt.
+    try:
+        from google.colab import userdata
+        val = userdata.get(name)
+        if val:
+            return val
+    except Exception:
+        pass
+    val = os.environ.get(name)
+    if val:
+        return val
+    import getpass
+    return getpass.getpass(prompt or f'{name}: ')
+
+TNS_BOT_ID   = _get_secret('TNS_BOT_ID')
+TNS_BOT_NAME = _get_secret('TNS_BOT_NAME')
+TNS_API_KEY  = _get_secret('TNS_API_KEY')
+
+TNS_MARKER = ('tns_marker{"tns_id":' + str(TNS_BOT_ID) +
+              ',"type": "bot", "name":"' + TNS_BOT_NAME + '"}')
+HEADERS = {'user-agent': TNS_MARKER}
+
+assert TNS_API_KEY and TNS_BOT_ID, 'TNS credentials are not set'
+print(f'TNS credentials loaded for bot id {TNS_BOT_ID} (key not shown)')
+"""))
 A(code(orig_src(4)))                       # TNS bulk CSV                (verbatim)
 A(code(orig_src(5)))                       # classify_sn_subtype + pools (verbatim)
 A(code(orig_src(6)))                       # extract_ztf_name/resolve_oid(verbatim)
