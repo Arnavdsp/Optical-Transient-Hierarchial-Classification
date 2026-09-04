@@ -5,3 +5,7 @@ __pycache__/
 outputs/
 *.pkl
 *.npy
+
+# local run secrets — never commit
+.env.local
+data/

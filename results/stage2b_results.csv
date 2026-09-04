@@ -1,0 +1,5 @@
+Model,End-to-end accuracy (all test objects),Conditional accuracy (correctly-routed SNe),Option-A-comparable accuracy (true SNe),Non-SNe mis-routed into Stage 2,True SNe lost before Stage 2
+Random Forest,0.7272727272727273,0.72,0.6,6,5
+Logistic Regression,0.6363636363636364,0.3333333333333333,0.2,5,12
+Bagging (Trees),0.7090909090909091,0.64,0.5333333333333333,5,5
+Bagging (SVM),0.6363636363636364,0.3684210526315789,0.23333333333333334,5,11

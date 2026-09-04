@@ -45,8 +45,46 @@ python tools/validate_notebook.py   # execute the notebook's own Phase 3/4 cells
 python tools/build_notebook.py      # rebuild the notebook from the modules
 ```
 
-Phase 2 (the real TNS/ALeRCE/TESS download) runs in the notebook, in Colab. It is
-checkpointed and resumable throughout.
+Phase 2 (the real TNS/ALeRCE/TESS download) runs either in the notebook under
+Colab, or headless:
+
+```bash
+python tools/run_phase2.py          # balanced acquisition; resumes if interrupted
+python tools/run_phase2.py --classes AGN,TDE
+python tools/run_phase3.py          # Phases 3 and 4 -> results/
+```
+
+Both paths run the same code: `btp_pipeline/features.py` holds the reused
+extraction functions, lifted verbatim from the original notebook by
+`tools/extract_features_module.py`, and `tests/test_features_parity.py` asserts the
+module and the notebook still define them identically.
+
+Headless acquisition needs `alerce` and `lightkurve`, whose legacy dependencies
+(`fbpca`, `memoization`) will not build against modern setuptools. A venv pinned to
+`setuptools<60` installs them cleanly.
+
+## Results (real run)
+
+`results/` holds the output of a full run against TNS, ALeRCE and TESS —
+`results_summary.md` is the generated write-up, alongside the per-stage tables,
+plots and the 549-row feature table.
+
+Final sample: **150 SNe** (30 each of Ia/Ib/Ic/II/SLSN), **125 AGN**, **124 TDE**,
+**150 stellar flares**. The two shortfalls are not fixable by pulling harder: the
+entire TNS catalogue (206,621 rows) contains only 176 AGN-family and 153 TDE
+objects, so 150 survivors of each is above what the source can supply. See
+`results/count_report.csv`.
+
+Headline: Stage 1 reaches 0.791 (Random Forest and Bagging (Trees)); Stage 2
+Option A reaches 0.633 (Random Forest), up from the ~0.47-0.53 of the unbalanced
+build. Read `results/results_summary.md` for the numbers with their error bars —
+Stage 2's held-out set is 30 objects, so the repeated-CV estimate (0.607 +/- 0.091)
+is the more reliable figure.
+
+Two feature-construction problems surfaced only once real data was in hand, and
+are documented in the summary: `amplitude` is exactly `peak_val - 1` for every ZTF
+object, and `rise_time`/`decay_time` partly measure the observing baseline rather
+than the transient.
 
 ## Credentials
 

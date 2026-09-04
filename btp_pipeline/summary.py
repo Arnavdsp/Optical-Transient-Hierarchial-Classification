@@ -103,7 +103,7 @@ def _md_table(df, floatfmt='{:.3f}'):
 def build_results_markdown(count_report, split, stage1, stage2a, stage2b, comparison,
                            perm_s1, perm_s2, misclass_s1, misclass_s2,
                            recall_s1, recall_s2, resolution_s1, resolution_s2,
-                           repeated_cv_s2=None, feature_df=None):
+                           repeated_cv_s2=None, feature_df=None, diagnostics=None):
     """Assemble the whole results summary as a markdown string."""
     L = []
     add = L.append
@@ -238,6 +238,10 @@ def build_results_markdown(count_report, split, stage1, stage2a, stage2b, compar
             "come from'. The stellar-flare class is therefore easier than it looks. The "
             "physically meaningful Stage 1 result is the separation *among the three ZTF "
             "classes* (SNe / AGN / TDE), where `has_color` carries no information.\n")
+
+    if diagnostics:
+        from btp_pipeline.interpret import format_feature_diagnostics
+        add(format_feature_diagnostics(diagnostics))
 
     add("\n## Honest caveats\n")
     add("- **Feature set is deliberately minimal.** Four shape scalars plus a colour and a "

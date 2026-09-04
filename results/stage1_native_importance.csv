@@ -1,0 +1,19 @@
+Model,feature,native_importance,native_kind
+Random Forest,peak_val,0.2145020261060619,Gini importance
+Random Forest,rise_time,0.17628252365526653,Gini importance
+Random Forest,decay_time,0.14397178144421627,Gini importance
+Random Forest,amplitude,0.17143721650866178,Gini importance
+Random Forest,color_g_r,0.23104902118693857,Gini importance
+Random Forest,has_color,0.06275743109885498,Gini importance
+Logistic Regression,peak_val,1.291862618124374,mean |standardised coef|
+Logistic Regression,rise_time,0.5125890877659797,mean |standardised coef|
+Logistic Regression,decay_time,0.4710412390632166,mean |standardised coef|
+Logistic Regression,amplitude,1.2779679174966658,mean |standardised coef|
+Logistic Regression,color_g_r,0.7608374375171313,mean |standardised coef|
+Logistic Regression,has_color,1.0215338449108735,mean |standardised coef|
+Bagging (Trees),peak_val,0.4068370039528115,mean Gini across bagged trees
+Bagging (Trees),rise_time,0.2605159483931393,mean Gini across bagged trees
+Bagging (Trees),decay_time,0.20830019415971185,mean Gini across bagged trees
+Bagging (Trees),amplitude,0.2770019988290853,mean Gini across bagged trees
+Bagging (Trees),color_g_r,0.304925791633189,mean Gini across bagged trees
+Bagging (Trees),has_color,0.04565151230773889,mean Gini across bagged trees
