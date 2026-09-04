@@ -48,6 +48,18 @@ python tools/build_notebook.py      # rebuild the notebook from the modules
 Phase 2 (the real TNS/ALeRCE/TESS download) runs in the notebook, in Colab. It is
 checkpointed and resumable throughout.
 
+## Credentials
+
+TNS credentials are **not** stored in the notebook. It reads `TNS_BOT_ID`,
+`TNS_BOT_NAME` and `TNS_API_KEY` at run time — from the Colab Secrets panel (key
+icon in the left sidebar, with notebook access enabled), from environment
+variables, or by interactive prompt as a last resort.
+
+The previous notebook hard-coded a live TNS bot API key. That key reached this
+public repository before it was removed, so **it must be rotated at
+<https://www.wis-tns.org/> under the bot's settings.** `tests/test_no_secrets.py`
+scans the repo on every CI run to stop a credential being committed again.
+
 ## Design decisions worth knowing
 
 **One global split.** Stage 1 and Stage 2 are *not* split independently. There is
