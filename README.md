@@ -27,7 +27,7 @@ tools/synthetic_dry_run.py                      full Phase 3+4 run on synthetic 
 tools/validate_notebook.py                      executes the notebook's own cells offline
 ```
 
-**The notebook is generated, not hand-edited.** `btp_pipeline/` is the single source
+**The notebook.** `btp_pipeline/` is the single source
 of truth; `tools/build_notebook.py` inlines those modules verbatim into notebook
 cells and copies the reused functions verbatim out of the previous notebook. The
 result is self-contained — it needs no repo clone at run time — while the code
