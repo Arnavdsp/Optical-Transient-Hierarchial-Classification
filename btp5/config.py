@@ -53,6 +53,11 @@ DIAGNOSTIC_ONLY_MODELS = ['Bagging (SVM)', 'HistGradientBoosting']
 # (de Soto et al. 2024) used when building their own ALeRCE-labelled comparison set.
 ALERCE_CONF_THRESHOLD = 0.5
 
+# Section 3.3 pool 2: objects acquired FROM ALeRCE, per group (AGN, SN_Ia, SN_Ibc,
+# SN_II, SLSN, TDE, stellar_flare). A ceiling applies regardless: at p>=0.5 the live
+# BHRF catalogue held only 33 SESN, 43 SLSN and 23 TDE in total (checked 2026-09-29).
+N_ALERCE_NATIVE_PER_GROUP = 30
+
 # Section 3.2/3.1: which ALeRCE classifier supplies the labels.
 #
 # Verified live against query_classifiers() on 2026-09-25 — NOT hardcoded from
@@ -70,5 +75,11 @@ ALERCE_SECONDARY_CLASSIFIER = 'lc_classifier'
 
 # Section 5: ZTF empirical noise model, Townsend et al. 2026 (arXiv:2602.13036),
 # their published fitted constants.
-NOISE_MODEL = dict(e_b=18.0, m=0.04, c=4.7, delta=-0.006)
+NOISE_MODEL = dict(e_b=18.0, m=0.04, c=4.7, delta=-0.006)   # in microjansky (see augment.py)
 AUGMENT_CLASSES = ['SLSN', 'SN_Ib', 'SN_Ic', 'TDE']
+AUGMENT_COPIES_PER_PARENT = 2   # Townsend's 'unbalanced' strategy: constant copies per
+                                # object, applied to the four small classes only
+AUGMENT_DZ_MAX = 0.1            # Townsend Sect. 3.3: z_sim in [z_true, z_true + 0.1]
+AUGMENT_Z_SCALE = 2             # p(z) ~ z^2, constant volumetric rate
+AUGMENT_SUBSAMPLING_RATE = 1.0  # off. Townsend tested 0.7/0.9/1.0; their chosen value
+                                # (Table 3) was not verified here, so none is assumed

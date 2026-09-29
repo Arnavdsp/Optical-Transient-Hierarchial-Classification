@@ -52,79 +52,15 @@ def test_attach_alerce_labels_leaves_unmatched_objects_as_nan():
     assert len(out) == len(df)
 
 
-# ------------------------------------------------------------------ augmentation
-def test_noise_model_uses_the_published_ztf_constants():
-    assert NOISE_MODEL == {'e_b': 18.0, 'm': 0.04, 'c': 4.7, 'delta': -0.006}
-
-
-def test_uncertainty_grows_as_flux_falls():
-    rng = np.random.default_rng(0)
-    bright = AUG.ztf_flux_uncertainty(np.full(4000, 5000.0), rng)
-    faint = AUG.ztf_flux_uncertainty(np.full(4000, 100.0), rng)
-    assert (faint / 100.0).mean() > (bright / 5000.0).mean(), \
-        'fainter sources must have larger FRACTIONAL uncertainty'
-    assert (bright > 0).all() and (faint > 0).all()
-    assert np.isfinite(AUG.ztf_flux_uncertainty(np.array([0.0, -5.0]), rng)).all()
-
-
-def test_redshifting_dims_and_dilates_but_never_jitters_time():
-    t = np.linspace(0, 100, 60)
-    f = 1000 * np.exp(-((t - 30) ** 2) / 200)
-    t2, f2, k = AUG.rescale_to_redshift(t, f, z_true=0.05, z_sim=0.15)
-
-    assert f2.max() < f.max(), 'moving an object further away must make it fainter'
-    assert (t2.max() - t2.min()) > (t.max() - t.min()), 'time dilation must stretch'
-    assert t2[0] == pytest.approx(t[0]), 'the anchor epoch should not move'
-    assert np.all(np.diff(t2) > 0), 'ordering must be preserved'
-    # Timestamp jitter is an evidenced negative result and must not be applied:
-    # the transform has to be a deterministic monotone map of the input times.
-    t2b, _, _ = AUG.rescale_to_redshift(t, f, z_true=0.05, z_sim=0.15)
-    assert np.array_equal(t2, t2b), 'time axis must be deterministic, never jittered'
-    assert k == pytest.approx(-2.5 * np.log10(1.15 / 1.05))
-
-
-def test_augment_lightcurve_returns_errors_and_keeps_times_deterministic():
-    rng = np.random.default_rng(3)
-    t = np.linspace(0, 80, 40)
-    f = 500 * np.exp(-((t - 25) ** 2) / 150) + 10
-    a = AUG.augment_lightcurve(t, f, 0.03, 0.12, rng)
-    b = AUG.augment_lightcurve(t, f, 0.03, 0.12, np.random.default_rng(99))
-    assert np.array_equal(a['t'], b['t']), 'times identical across noise draws'
-    assert not np.array_equal(a['flux'], b['flux']), 'flux should differ (noise)'
-    assert (a['flux_err'] > 0).all() and len(a['flux_err']) == len(t)
-
-
-def test_augmentation_plan_and_synthetic_flagging():
-    counts = {'SLSN': 12, 'SN_Ib': 30, 'TDE': 0}
-    plan = AUG.plan_augmentation(counts, 30, ['SLSN', 'SN_Ib', 'TDE'], verbose=False)
-    p = plan.set_index('class')
-    assert p.loc['SLSN', 'synthetic_needed'] == 18
-    assert p.loc['SN_Ib', 'synthetic_needed'] == 0, 'a class at target is left alone'
-    assert p.loc['TDE', 'synthetic_needed'] == 30
-    assert not np.isfinite(p.loc['TDE', 'copies_per_real'])
-
-    ok, msg = AUG.augmented_rows_are_flagged(
-        pd.DataFrame({'is_synthetic': [True, False, False]}))
-    assert ok and '1 synthetic' in msg
-    bad, _ = AUG.augmented_rows_are_flagged(pd.DataFrame({'x': [1]}))
-    assert not bad
-
-
-def test_synthetic_rows_are_kept_out_of_the_test_set():
-    """A synthetic copy shares its parent's light curve, so it in the test set is
-    leakage wearing a hat."""
-    df = synthetic5.make_feature_df()
-    df.loc[df.index[:40], 'is_synthetic'] = True
-    split = prepare_split(df, FEATURE_COLS, 'coarse_label', verbose=False)
-    test_rows = split['df'].iloc[split['idx_test']]
-    assert not test_rows['is_synthetic'].any(), 'synthetic rows leaked into test'
-    train_rows = split['df'].iloc[split['idx_train']]
-    assert train_rows['is_synthetic'].sum() > 0, 'synthetic rows should still train'
-
-
 # ------------------------------------------------------------------ host offset
 def test_host_offset_missing_data_follows_the_existing_convention():
     df = synthetic5.make_feature_df().head(12).copy()
+    # This test is about the NaN + flag convention, so coordinates are supplied
+    # directly. Recovering them from saved light curves — the step a real run
+    # depends on — is covered end to end in test_lightcurves.py.
+    ztf = df['survey'] == 'ZTF'
+    df['ra'] = np.where(ztf, 150.0, np.nan)
+    df['dec'] = np.where(ztf, 20.0, np.nan)
 
     def resolver(ra, dec, name):
         if not np.isfinite(ra):

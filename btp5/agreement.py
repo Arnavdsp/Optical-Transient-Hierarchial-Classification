@@ -206,3 +206,121 @@ TNS_LABEL_NOISE_CAVEAT = (
     "reanalysis noise-dominated with no safe classification available. Results here are "
     "therefore described as agreement with TNS's *recorded* classification, not as "
     "agreement with ground truth.")
+
+
+# --------------------------------------------------------------------------
+# The full Section 6 report, both subsets, one stage at a time
+# --------------------------------------------------------------------------
+
+SUBSET_SPEC = 'TNS-confirmed (= overlap pool)'
+SUBSET_PHOT = 'photometric-only (ALeRCE-confident, no TNS label)'
+
+
+def agreement_report(frame, our_col, alerce_col, truth_col, classes, model_name, stage,
+                     tns_col='has_tns_label', min_n=5, purity_ours=None):
+    """
+    Expected vs actual agreement for one model at one stage.
+
+    How Section 6.2's split is read, stated because the brief's two definitions
+    collide: 6.2 asks for the overlap pool split into TNS-confirmed and non-confirmed
+    subsets, but Section 3.3 defines the overlap pool as objects that ARE
+    TNS-confirmed, so that second subset is empty by construction. de Soto et al.'s
+    actual design compares every object BOTH pipelines classify. Here that is the
+    ALeRCE-confident pool, split into its TNS-confirmed part — which is exactly the
+    overlap pool — and its photometric-only part.
+
+    P_ours and C_ALeRCE come from the TNS-confirmed objects (the only ones with a truth
+    to score against), and are then used as the independent-error baseline for BOTH
+    subsets. That is also de Soto et al.'s construction.
+    """
+    f = frame[frame[our_col].isin(classes) & frame[alerce_col].isin(classes)].copy()
+    truthed = f[f[truth_col].isin(classes)]
+    out = {'model': model_name, 'stage': stage, 'classes': list(classes), 'subsets': {}}
+    if len(truthed) < min_n:
+        out['note'] = (f'only {len(truthed)} objects with a truth label in these classes — '
+                       'purity/completeness matrices cannot be estimated')
+        return out
+    # P_ours: pass the purity matrix from the FULL validation set when available (de
+    # Soto et al. build it from their whole validation sample, not from the handful
+    # of objects that happen to sit in the comparison pool). C_ALeRCE can only come
+    # from objects that have both a TNS truth and an ALeRCE label, i.e. the overlap.
+    P = (purity_ours.reindex(index=classes, columns=classes).fillna(0.0)
+         if purity_ours is not None
+         else purity_matrix(truthed[truth_col], truthed[our_col], classes))
+    C = completeness_matrix(truthed[truth_col], truthed[alerce_col], classes)
+    out['purity_ours'], out['completeness_alerce'] = P, C
+    out['expected_matrix'] = expected_agreement(P, C)
+
+    for name, mask in [(SUBSET_SPEC, f[tns_col].astype(bool)),
+                       (SUBSET_PHOT, ~f[tns_col].astype(bool))]:
+        sub = f[mask]
+        if len(sub) < min_n:
+            out['subsets'][name] = {'n': int(len(sub)), 'note': 'too few objects'}
+            continue
+        res = compare_expected_actual(sub[our_col].values, sub[alerce_col].values,
+                                      P, C, classes)
+        res['text'] = interpret_agreement(res, f'{model_name} ({stage})', name)
+        out['subsets'][name] = res
+    return out
+
+
+def contrast_subsets(report):
+    """
+    The de Soto comparison: agreement on the spectroscopic vs photometric subset.
+    They found 82% vs 72%. Reported either way, not assumed.
+    """
+    s, p = report['subsets'].get(SUBSET_SPEC, {}), report['subsets'].get(SUBSET_PHOT, {})
+    if 'actual_rate' not in s or 'actual_rate' not in p:
+        return (f"{report['model']} ({report['stage']}): the spectroscopic/photometric "
+                f"contrast needs both subsets populated (n={s.get('n', 0)} and "
+                f"{p.get('n', 0)}).")
+    a, b = s['actual_rate'], p['actual_rate']
+    msg = (f"{report['model']} ({report['stage']}): agreement {100 * a:.1f}% on the "
+           f"TNS-confirmed subset (n={s['n']}) vs {100 * b:.1f}% on the photometric-only "
+           f"subset (n={p['n']}). ")
+    if b < a - 0.02:
+        msg += ("Lower on the photometric-only subset, the same direction as de Soto et al. "
+                "(82% vs 72%). Expected: those objects are fainter or less well sampled on "
+                "average (nobody took a spectrum), and here they also lack a redshift, so "
+                "peak absolute magnitude is imputed for every one of them.")
+    elif b > a + 0.02:
+        msg += ("HIGHER on the photometric-only subset — the opposite of de Soto et al.'s "
+                "finding. Worth checking class composition: the photometric-only pool is "
+                "drawn per ALeRCE class and may be richer in the easy classes.")
+    else:
+        msg += 'The two subsets agree to within ~2 points, unlike de Soto et al.'
+    return msg
+
+
+def tde_crosscheck(frame, tns_label_col='label', top1_col='alerce_top1_class',
+                   of_interest=('TDE', 'SLSN'), min_n=3):
+    """
+    Section 3.1: what does ALeRCE's own classifier make of objects TNS calls a TDE (and
+    SLSN)? Uses ALeRCE's top-1 class for every object queried, regardless of confidence,
+    so it is the direct analogue of Superphot+ Table 3 (true TDEs forced through a SN
+    classifier: 54.9% -> SLSN-I, 21.6% -> SN IIn, 13.7% -> SN Ia). The difference is that
+    ALeRCE's 2025 classifier HAS a TDE class, so this measures how often it uses it.
+    """
+    f = frame[frame[tns_label_col].isin(of_interest) & frame[top1_col].notna()]
+    if len(f) < min_n:
+        return None, (f'only {len(f)} TNS {"/".join(of_interest)} objects have an ALeRCE '
+                      'classification — cross-check not meaningful')
+    tab = pd.crosstab(f[tns_label_col], f[top1_col], normalize='index')
+    n = f[tns_label_col].value_counts()
+    tab.insert(0, 'n', n.reindex(tab.index))
+    lines = []
+    if 'TDE' in tab.index:
+        row = tab.loc['TDE'].drop('n')
+        hit = float(row.get('TDE', 0.0))
+        rest = row.drop('TDE', errors='ignore').sort_values(ascending=False)
+        lines.append(f"Of {int(tab.loc['TDE', 'n'])} TNS-classified TDEs, ALeRCE's top-1 "
+                     f"class is TDE for {100 * hit:.0f}%.")
+        if len(rest) and rest.iloc[0] > 0:
+            lines.append(f"The most common alternative is {rest.index[0]} "
+                         f"({100 * rest.iloc[0]:.0f}%).")
+        if 'SLSN' in rest.index and rest['SLSN'] > 0:
+            lines.append("TDE->SLSN is the confusion Superphot+ Table 3 found for 54.9% of "
+                         "true TDEs; seeing it here as well is consistent with a shared, "
+                         "physical ambiguity (both are slow, blue, luminous nuclear-ish "
+                         "transients), not a defect of either pipeline.")
+    return tab, ' '.join(lines)

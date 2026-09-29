@@ -111,11 +111,23 @@ def prepare_split(df, feature_cols, label_col, test_size=0.2,
              if exclude_synthetic_from_test and 'is_synthetic' in sub.columns
              else np.zeros(len(sub), bool))
 
+    n_dropped_children = 0
     if synth.any():
         real_idx = idx[~synth]
         tr_r, te_r = train_test_split(real_idx, test_size=test_size,
                                       stratify=y[real_idx], random_state=random_state)
-        idx_train = np.sort(np.concatenate([tr_r, idx[synth]]))
+        # A synthetic copy is a noisier view of its parent's own light curve. If the
+        # parent is being held out, training on its copy lets the model rehearse the
+        # test object — so such copies are dropped. This is the guarantee Townsend et
+        # al. (2026) get by splitting before augmenting.
+        synth_idx = idx[synth]
+        if 'parent_id' in sub.columns:
+            test_ids = set(sub['id'].iloc[te_r].astype(str))
+            parent = sub['parent_id'].astype(str).values
+            keep_synth = np.array([parent[i] not in test_ids for i in synth_idx], bool)
+            n_dropped_children = int((~keep_synth).sum())
+            synth_idx = synth_idx[keep_synth]
+        idx_train = np.sort(np.concatenate([tr_r, synth_idx]))
         idx_test = np.sort(te_r)
     else:
         idx_train, idx_test = train_test_split(idx, test_size=test_size,
@@ -130,7 +142,8 @@ def prepare_split(df, feature_cols, label_col, test_size=0.2,
     if verbose:
         print(f'  {len(idx_train)} train / {len(idx_test)} test, '
               f'{len(le.classes_)} classes'
-              + (f', {int(synth.sum())} synthetic rows held in train'
+              + (f', {int(synth.sum()) - n_dropped_children} synthetic rows in train '
+                 f'({n_dropped_children} dropped: their parent is in test)'
                  if synth.any() else ''))
     return {'df': sub, 'X': X, 'le': le, 'y': y, 'scaler': scaler,
             'idx_train': idx_train, 'idx_test': idx_test,
@@ -292,3 +305,90 @@ def build_diagnostic_models(random_state=RANDOM_STATE, n_jobs=-1):
     models['HistGradientBoosting'] = HistGradientBoostingClassifier(
         random_state=random_state)
     return models
+
+
+def oof_predictions(df, feature_cols, label_col, model_name, n_splits=5,
+                    random_state=RANDOM_STATE, verbose=True):
+    """
+    Out-of-fold predictions for every REAL labelled row: each object is predicted by a
+    model that never saw it.
+
+    Why this, for the agreement matrices, rather than the held-out test split: the test
+    split is ~20% of the sample, which at Stage 2 means a handful of objects per class
+    — too few for a class-by-class agreement matrix to mean anything. Out-of-fold
+    predictions cover every object once, with the same no-peeking guarantee. de Soto
+    et al. likewise build their purity/completeness matrices from validation folds.
+
+    Synthetic rows are only ever trained on, and only in folds where their parent is
+    also on the training side.
+    """
+    from sklearn.model_selection import StratifiedKFold
+
+    sub = df[df[label_col].notna()].reset_index(drop=True)
+    synth = (sub['is_synthetic'].astype(bool).values if 'is_synthetic' in sub.columns
+             else np.zeros(len(sub), bool))
+    y_raw = sub[label_col].astype(str).values
+    real_idx = np.flatnonzero(~synth)
+    vc = pd.Series(y_raw[real_idx]).value_counts()
+    keep_classes = set(vc[vc >= 2].index)
+    real_idx = np.array([i for i in real_idx if y_raw[i] in keep_classes])
+    if len(real_idx) < 10 or len(keep_classes) < 2:
+        return pd.DataFrame(columns=['id', 'true', 'pred', 'confidence'])
+
+    le = LabelEncoder().fit(sorted(keep_classes))
+    X = sub[feature_cols].astype(float).values
+    k = int(min(n_splits, pd.Series(y_raw[real_idx]).value_counts().min()))
+    k = max(k, 2)
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=random_state)
+
+    ids = sub['id'].astype(str).values
+    parent = (sub['parent_id'].astype(str).values if 'parent_id' in sub.columns
+              else np.array([''] * len(sub)))
+    synth_idx = np.flatnonzero(synth & np.isin(y_raw, list(keep_classes)))
+
+    preds, confs, rows = {}, {}, []
+    for tr_pos, te_pos in skf.split(real_idx, y_raw[real_idx]):
+        tr, te = real_idx[tr_pos], real_idx[te_pos]
+        tr_ids = set(ids[tr])
+        kids = [i for i in synth_idx if parent[i] in tr_ids]
+        tr_all = np.concatenate([tr, np.array(kids, int)])
+        Xtr, Xte = impute(X[tr_all], X[te])
+        sc = StandardScaler().fit(Xtr)
+        m = build_models(random_state=random_state)[model_name]
+        m.fit(sc.transform(Xtr), le.transform(y_raw[tr_all]))
+        Xte_s = sc.transform(Xte)
+        p = m.predict(Xte_s)
+        c = (m.predict_proba(Xte_s).max(axis=1) if hasattr(m, 'predict_proba')
+             else np.full(len(te), np.nan))
+        for i, pi, ci in zip(te, p, c):
+            rows.append({'id': ids[i], 'true': y_raw[i],
+                         'pred': le.inverse_transform([pi])[0], 'confidence': float(ci)})
+    out = pd.DataFrame(rows)
+    if verbose:
+        acc = float((out['true'] == out['pred']).mean()) if len(out) else float('nan')
+        print(f'  {model_name}: {len(out)} out-of-fold predictions ({k} folds), '
+              f'OOF accuracy {acc:.3f}')
+    return out
+
+
+def predict_unseen(train_df, feature_cols, label_col, model_name, target_df,
+                   random_state=RANDOM_STATE):
+    """
+    Predictions for objects that have NO label on this track (the photometric-only
+    ALeRCE objects), from a model trained on every labelled row. Those objects were
+    never in training, so this carries the same no-peeking guarantee as OOF.
+    """
+    tr = train_df[train_df[label_col].notna()]
+    if len(tr) == 0 or len(target_df) == 0:
+        return pd.DataFrame(columns=['id', 'pred', 'confidence'])
+    le = LabelEncoder().fit(tr[label_col].astype(str))
+    Xtr, Xte = impute(tr[feature_cols].astype(float).values,
+                      target_df[feature_cols].astype(float).values)
+    sc = StandardScaler().fit(Xtr)
+    m = build_models(random_state=random_state)[model_name]
+    m.fit(sc.transform(Xtr), le.transform(tr[label_col].astype(str)))
+    Xs = sc.transform(Xte)
+    conf = m.predict_proba(Xs).max(axis=1) if hasattr(m, 'predict_proba') else np.nan
+    return pd.DataFrame({'id': target_df['id'].astype(str).values,
+                         'pred': le.inverse_transform(m.predict(Xs)),
+                         'confidence': conf})

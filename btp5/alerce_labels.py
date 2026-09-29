@@ -265,3 +265,24 @@ def label_from_probabilities(prob_df, classifier_name, classifier_version=None,
 def collapse_tns_fine(label):
     """Our TNS fine label in ALeRCE's coarser SN vocabulary (Ib/Ic -> Ibc)."""
     return TNS_TO_ALERCE_FINE.get(label, label)
+
+
+def describe_probabilities(prob_df, classifier_name, classifier_version=None,
+                           threshold=0.5):
+    """
+    Everything the notebook records per object: the raw top-1 (always, even below the
+    cut — the Section 3.1 TDE cross-check needs what ALeRCE thinks of every TNS TDE,
+    not just the confident ones) plus the thresholded, crosswalked labels (None when
+    the object does not qualify for the ALeRCE-confident pool).
+    """
+    top = top_class(prob_df, classifier_name, classifier_version)
+    if top is None:
+        return None
+    out = {'alerce_top1_class': top['class_name'], 'alerce_top1_prob': top['probability'],
+           'alerce_version': top['classifier_version'],
+           'alerce_class': None, 'alerce_prob': np.nan,
+           'alerce_coarse': None, 'alerce_fine': None}
+    lab = label_from_probabilities(prob_df, classifier_name, classifier_version, threshold)
+    if lab is not None:
+        out.update(lab)
+    return out

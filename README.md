@@ -11,6 +11,41 @@ ALeRCE, plus TESS light curves via `lightkurve` for stellar flares. Four models 
 trained at each stage: Random Forest, Logistic Regression, Bagging (Trees) and
 Bagging (SVM).
 
+## v5 — TNS vs ALeRCE ground truth
+
+`notebooks/BTP_TNS_Hierarchical_v5.ipynb` builds on the v4 pipeline (Villar fit,
+quality gate, retry loop — preserved verbatim) and runs the whole two-stage hierarchy
+twice: once against TNS spectroscopic labels, once against ALeRCE's own classifier
+output. The two are then compared with the expected-vs-actual agreement framework of
+de Soto et al. (2024, arXiv:2403.07975), at both stages, on three separately tracked
+pools (TNS-confirmed, ALeRCE-confident, overlap).
+
+```
+btp5/
+  config.py          v4 settings + v5 additions
+  photometry.py      v4's Villar fit / quality gate / features, lifted verbatim by AST
+  lightcurves.py     finds each saved light curve and recovers its sky position
+  alerce_labels.py   live taxonomy, crosswalk, version-keyed labels
+  alerce_native.py   pool 2 sourced from ALeRCE itself, uniformly sampled
+  pools.py           the three pools
+  hostoffset.py      host offset via astro-ghost (NaN + flag on failure)
+  augment.py         Townsend et al. (2026) noise-model augmentation
+  modeling.py        one dual-track runner; out-of-fold predictions
+  diagnostics.py     v4's diagnostics on both tracks, via adapters
+  agreement.py       expected vs actual agreement, subset contrast, TDE cross-check
+  calibration.py     reliability curves with and without redshift
+tests5/              74 offline tests
+tools/build_notebook_v5.py      builds the notebook from btp5/ + the vendored v4 notebook
+tools/validate_notebook_v5.py   executes the notebook's own cells offline, end to end
+```
+
+Everything the v5 notebook says about ALeRCE was checked against the live API, and a
+few of those checks contradicted the brief it was built from. They are listed at the
+top of the notebook: TDE exists only in the 2025 BHRF classifier; probabilities come
+back stacked across classifier versions; the live SN branch does separate SNIIn;
+ALeRCE returns its least confident objects first; and its confident set holds only 33
+SESN, 43 SLSN and 23 TDE.
+
 ## Layout
 
 ```
@@ -43,6 +78,10 @@ python -m pytest tests/ -q          # 26 tests, no network
 python tools/synthetic_dry_run.py   # full Phase 3+4 on synthetic data
 python tools/validate_notebook.py   # execute the notebook's own Phase 3/4 cells
 python tools/build_notebook.py      # rebuild the notebook from the modules
+
+python -m pytest tests5/ -q            # v5: 74 tests, no network
+python tools/build_notebook_v5.py      # v5: rebuild the notebook
+python tools/validate_notebook_v5.py   # v5: execute the notebook offline, end to end
 ```
 
 Phase 2 (the real TNS/ALeRCE/TESS download) runs either in the notebook under

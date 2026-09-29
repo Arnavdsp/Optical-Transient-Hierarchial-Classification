@@ -54,8 +54,10 @@ def make_feature_df(counts=None, seed=42, with_alerce=True, alerce_agreement=0.7
                                 else float(abs(rng.normal(0.08, 0.05)) + 0.005)),
                    'peak_abs_mag': (np.nan if not np.isfinite(pam)
                                     else float(rng.normal(pam, 0.8))),
-                   'ra': float(rng.uniform(0, 360)) if survey == 'ZTF' else np.nan,
-                   'dec': float(rng.uniform(-30, 80)) if survey == 'ZTF' else np.nan,
+                   # NO ra/dec here, deliberately: v4's process_ztf_object never
+                   # writes coordinates into a feature row. An earlier fixture did,
+                   # which let the host-offset path pass tests while being silently
+                   # empty in a real run.
                    'is_synthetic': False}
             for c in ['gr_log_A', 'gr_dt0', 'gr_log_tau_rise', 'gr_log_tau_fall',
                       'gr_dbeta', 'gr_log_gamma']:
@@ -128,3 +130,45 @@ def make_probabilities_frame(oid='ZTFtest', seed=0, multi_version=True):
                          'classifier_version': ver, 'class_name': c,
                          'probability': float(pr), 'ranking': 0})
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Realistic on-disk light curves
+# ---------------------------------------------------------------------------
+ZP_FIXTURE = 27.5  # must match photometry.ZP
+
+
+def villar_flux(t, A, beta, gamma, t0, tau_rise, tau_fall):
+    sig = 1.0 / (1.0 + np.exp(-(t - t0) / tau_rise))
+    out = np.where(t < gamma + t0, A * (1.0 - beta * (t - t0)),
+                   A * (1.0 - beta * gamma) * np.exp(-(t - (gamma + t0)) / tau_fall))
+    return sig * out
+
+
+def make_lightcurve_csv(path, peak_mag=18.0, seed=0, n_per_band=55, span=170.0,
+                        t0=45.0, tau_rise=4.0, tau_fall=30.0, gamma=12.0, beta=0.004,
+                        g_minus_r=0.05, ra=150.0, dec=20.0, mjd0=59000.0):
+    """
+    Two-band ZTF-alert-shaped CSV (mjd, fid, magpsf, sigmapsf, ra, dec) of a Villar
+    light curve, keeping only >5-sigma detections as the real alert stream does.
+    Built to clear v4's quality gate, so tests exercise the real fitter.
+    """
+    rng = np.random.default_rng(seed)
+    A_r = 10 ** (-0.4 * (peak_mag - ZP_FIXTURE))
+    rows = []
+    for fid, dm in ((1, g_minus_r), (2, 0.0)):
+        A = A_r * 10 ** (-0.4 * dm)
+        t = np.sort(rng.uniform(0, span, n_per_band))
+        f = villar_flux(t, A, beta, gamma, t0 + (0.5 if fid == 1 else 0.0), tau_rise, tau_fall)
+        # ~3% photometric error near peak, floor from a sky term
+        fe = np.sqrt((0.03 * f) ** 2 + (0.004 * A_r) ** 2)
+        fo = f + rng.normal(0, fe)
+        det = fo > 5 * fe
+        for ti, fi, ei in zip(t[det], fo[det], fe[det]):
+            rows.append({'mjd': mjd0 + ti, 'fid': fid,
+                         'magpsf': ZP_FIXTURE - 2.5 * np.log10(fi),
+                         'sigmapsf': 1.0857 * ei / fi,
+                         'ra': ra + rng.normal(0, 3e-5), 'dec': dec + rng.normal(0, 3e-5)})
+    df = pd.DataFrame(rows).sort_values('mjd')
+    df.to_csv(path, index=False)
+    return df

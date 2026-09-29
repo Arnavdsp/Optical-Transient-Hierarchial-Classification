@@ -53,13 +53,15 @@ def attach_alerce_labels(feature_df, alerce_label_rows, verbose=True):
     structural outcome described above, not a failure.
     """
     df = feature_df.copy()
+    cols = ['alerce_class', 'alerce_prob', 'alerce_coarse', 'alerce_fine',
+            'alerce_top1_class', 'alerce_top1_prob']
     lab = pd.DataFrame(alerce_label_rows) if alerce_label_rows else pd.DataFrame(
-        columns=['id', 'alerce_class', 'alerce_prob', 'alerce_coarse', 'alerce_fine'])
-    for c in ['alerce_class', 'alerce_prob', 'alerce_coarse', 'alerce_fine']:
+        columns=['id'] + cols)
+    for c in cols:
         if c not in lab.columns:
             lab[c] = np.nan
-    df = df.merge(lab[['id', 'alerce_class', 'alerce_prob', 'alerce_coarse', 'alerce_fine']],
-                  on='id', how='left')
+    df = df.drop(columns=[c for c in cols if c in df.columns])
+    df = df.merge(lab[['id'] + cols], on='id', how='left')
     if verbose:
         n = int(df['alerce_coarse'].notna().sum())
         print(f'ALeRCE labels attached to {n}/{len(df)} objects')
