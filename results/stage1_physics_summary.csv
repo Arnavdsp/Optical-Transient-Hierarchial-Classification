@@ -1,0 +1,7 @@
+,peak_val,peak_val,rise_time,rise_time,decay_time,decay_time,amplitude,amplitude,color_g_r,color_g_r
+,mean,std,mean,std,mean,std,mean,std,mean,std
+coarse_label,,,,,,,,,,
+AGN,4.68,4.766,770.623,883.199,754.947,772.679,3.68,4.766,0.334,0.472
+SNe,5.982,8.261,73.183,337.155,144.23,387.16,4.982,8.261,0.38,0.435
+TDE,4.323,5.98,137.411,422.934,202.55,399.911,3.323,5.98,-0.064,0.379
+stellar_flare,1.005,0.043,11.966,9.173,14.667,10.079,0.016,0.033,0.088,0.0

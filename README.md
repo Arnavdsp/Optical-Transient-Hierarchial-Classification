@@ -11,6 +11,41 @@ ALeRCE, plus TESS light curves via `lightkurve` for stellar flares. Four models 
 trained at each stage: Random Forest, Logistic Regression, Bagging (Trees) and
 Bagging (SVM).
 
+## v5 — TNS vs ALeRCE ground truth
+
+`notebooks/BTP_TNS_Hierarchical_v5.ipynb` builds on the v4 pipeline (Villar fit,
+quality gate, retry loop — preserved verbatim) and runs the whole two-stage hierarchy
+twice: once against TNS spectroscopic labels, once against ALeRCE's own classifier
+output. The two are then compared with the expected-vs-actual agreement framework of
+de Soto et al. (2024, arXiv:2403.07975), at both stages, on three separately tracked
+pools (TNS-confirmed, ALeRCE-confident, overlap).
+
+```
+btp5/
+  config.py          v4 settings + v5 additions
+  photometry.py      v4's Villar fit / quality gate / features, lifted verbatim by AST
+  lightcurves.py     finds each saved light curve and recovers its sky position
+  alerce_labels.py   live taxonomy, crosswalk, version-keyed labels
+  alerce_native.py   pool 2 sourced from ALeRCE itself, uniformly sampled
+  pools.py           the three pools
+  hostoffset.py      host offset via astro-ghost (NaN + flag on failure)
+  augment.py         Townsend et al. (2026) noise-model augmentation
+  modeling.py        one dual-track runner; out-of-fold predictions
+  diagnostics.py     v4's diagnostics on both tracks, via adapters
+  agreement.py       expected vs actual agreement, subset contrast, TDE cross-check
+  calibration.py     reliability curves with and without redshift
+tests5/              74 offline tests
+tools/build_notebook_v5.py      builds the notebook from btp5/ + the vendored v4 notebook
+tools/validate_notebook_v5.py   executes the notebook's own cells offline, end to end
+```
+
+Everything the v5 notebook says about ALeRCE was checked against the live API, and a
+few of those checks contradicted the brief it was built from. They are listed at the
+top of the notebook: TDE exists only in the 2025 BHRF classifier; probabilities come
+back stacked across classifier versions; the live SN branch does separate SNIIn;
+ALeRCE returns its least confident objects first; and its confident set holds only 33
+SESN, 43 SLSN and 23 TDE.
+
 ## Layout
 
 ```
@@ -43,10 +78,52 @@ python -m pytest tests/ -q          # 26 tests, no network
 python tools/synthetic_dry_run.py   # full Phase 3+4 on synthetic data
 python tools/validate_notebook.py   # execute the notebook's own Phase 3/4 cells
 python tools/build_notebook.py      # rebuild the notebook from the modules
+
+python -m pytest tests5/ -q            # v5: 74 tests, no network
+python tools/build_notebook_v5.py      # v5: rebuild the notebook
+python tools/validate_notebook_v5.py   # v5: execute the notebook offline, end to end
 ```
 
-Phase 2 (the real TNS/ALeRCE/TESS download) runs in the notebook, in Colab. It is
-checkpointed and resumable throughout.
+Phase 2 (the real TNS/ALeRCE/TESS download) runs either in the notebook under
+Colab, or headless:
+
+```bash
+python tools/run_phase2.py          # balanced acquisition; resumes if interrupted
+python tools/run_phase2.py --classes AGN,TDE
+python tools/run_phase3.py          # Phases 3 and 4 -> results/
+```
+
+Both paths run the same code: `btp_pipeline/features.py` holds the reused
+extraction functions, lifted verbatim from the original notebook by
+`tools/extract_features_module.py`, and `tests/test_features_parity.py` asserts the
+module and the notebook still define them identically.
+
+Headless acquisition needs `alerce` and `lightkurve`, whose legacy dependencies
+(`fbpca`, `memoization`) will not build against modern setuptools. A venv pinned to
+`setuptools<60` installs them cleanly.
+
+## Results (real run)
+
+`results/` holds the output of a full run against TNS, ALeRCE and TESS —
+`results_summary.md` is the generated write-up, alongside the per-stage tables,
+plots and the 549-row feature table.
+
+Final sample: **150 SNe** (30 each of Ia/Ib/Ic/II/SLSN), **125 AGN**, **124 TDE**,
+**150 stellar flares**. The two shortfalls are not fixable by pulling harder: the
+entire TNS catalogue (206,621 rows) contains only 176 AGN-family and 153 TDE
+objects, so 150 survivors of each is above what the source can supply. See
+`results/count_report.csv`.
+
+Headline: Stage 1 reaches 0.791 (Random Forest and Bagging (Trees)); Stage 2
+Option A reaches 0.633 (Random Forest), up from the ~0.47-0.53 of the unbalanced
+build. Read `results/results_summary.md` for the numbers with their error bars —
+Stage 2's held-out set is 30 objects, so the repeated-CV estimate (0.607 +/- 0.091)
+is the more reliable figure.
+
+Two feature-construction problems surfaced only once real data was in hand, and
+are documented in the summary: `amplitude` is exactly `peak_val - 1` for every ZTF
+object, and `rise_time`/`decay_time` partly measure the observing baseline rather
+than the transient.
 
 ## Credentials
 
