@@ -29,8 +29,8 @@ tools/validate_notebook.py                      executes the notebook's own cell
 
 `btp_pipeline/` is where the code lives. `tools/build_notebook.py` copies those
 modules into notebook cells, along with the functions reused from the previous
-notebook. The notebook runs without cloning the repo, and the code in it is the
-same code the tests run. To change pipeline logic: edit the
+notebook. The notebook runs without cloning the repo. The tests cover the
+`btp_pipeline/` modules, not the functions reused from the previous notebook. To change pipeline logic: edit the
 module, run the tests, rebuild the notebook.
 
 ## Running
