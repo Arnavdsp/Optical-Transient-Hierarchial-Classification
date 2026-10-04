@@ -3,8 +3,8 @@
 A two-stage machine-learning pipeline that classifies optical transients from
 light-curve shape features.
 
-- **Stage 1 (coarse):** SNe vs AGN vs TDE vs Stellar Flare — 150 objects each, 600 total.
-- **Stage 2 (fine):** for SNe, the subtype — Ia / Ib / Ic / II / SLSN, 30 each.
+- Stage 1 (coarse): SNe vs AGN vs TDE vs stellar flare, 150 objects each, 600 total.
+- Stage 2 (fine): for SNe, the subtype (Ia / Ib / Ic / II / SLSN), 30 each.
 
 Data comes from TNS (spectroscopically confirmed labels) with ZTF photometry via
 ALeRCE, plus TESS light curves via `lightkurve` for stellar flares. Four models are
@@ -27,11 +27,10 @@ tools/synthetic_dry_run.py                      full Phase 3+4 run on synthetic 
 tools/validate_notebook.py                      executes the notebook's own cells offline
 ```
 
- `btp_pipeline/` is the single source
-of truth; `tools/build_notebook.py` inlines those modules verbatim into notebook
-cells and copies the reused functions verbatim out of the previous notebook. The
-result is self-contained — it needs no repo clone at run time — while the code
-inside it is the code the test suite exercises. To change pipeline logic: edit the
+`btp_pipeline/` is where the code lives. `tools/build_notebook.py` copies those
+modules into notebook cells, along with the functions reused from the previous
+notebook. The notebook runs without cloning the repo. The tests cover the
+`btp_pipeline/` modules, not the functions reused from the previous notebook. To change pipeline logic: edit the
 module, run the tests, rebuild the notebook.
 
 ## Running
@@ -50,47 +49,46 @@ checkpointed and resumable throughout.
 
 ## Credentials
 
-TNS credentials are **not** stored in the notebook. It reads `TNS_BOT_ID`,
-`TNS_BOT_NAME` and `TNS_API_KEY` at run time — from the Colab Secrets panel (key
+TNS credentials are not stored in the notebook. It reads `TNS_BOT_ID`,
+`TNS_BOT_NAME` and `TNS_API_KEY` at run time from the Colab Secrets panel (key
 icon in the left sidebar, with notebook access enabled), from environment
-variables, or by interactive prompt as a last resort.
+variables, or from an interactive prompt as a last resort.
 
 The previous notebook hard-coded a live TNS bot API key. That key reached this
-public repository before it was removed, so **it must be rotated at
-<https://www.wis-tns.org/> under the bot's settings.** `tests/test_no_secrets.py`
+public repository before it was removed, so it has to be rotated at
+<https://www.wis-tns.org/> under the bot's settings. `tests/test_no_secrets.py`
 scans the repo on every CI run to stop a credential being committed again.
 
-## Design decisions worth knowing
+## Design decisions
 
-**One global split.** Stage 1 and Stage 2 are *not* split independently. There is
-one stratified 80/20 split over all 600 rows; Stage 2's train and test rows are the
+One global split. Stage 1 and Stage 2 aren't split independently. There is one
+stratified 80/20 split over all 600 rows; Stage 2's train and test rows are the
 SN-labelled subsets of Stage 1's own partitions. An earlier version split them
 separately, which let an SN object in Stage 1's test set appear in Stage 2's
 training set and inflate the cascaded accuracy. `assert_split_nesting` now checks
 this in code, so no post-hoc "leakage-free retrain" step is needed.
 
-**Retry until the target is met.** Objects are lost at every step — TNS rows with no
+Retry until the target is met. Objects are lost at every step: TNS rows with no
 ZTF cross-match, ALeRCE objects with too few detections, light curves that fail
-cleaning or GP fitting. That attrition is not uniform across classes, so accepting
-whatever survives systematically guts the rarest classes. Both acquisition loops
-count an object only once it has produced a feature row, and keep pulling candidates
-until the target is reached — or report the shortfall explicitly.
+cleaning or GP fitting. The losses differ by class, so keeping whatever survives
+shrinks the rarest classes the most. Both acquisition loops count an object only
+once it has produced a feature row, and keep pulling candidates until the target
+is reached, or report the shortfall.
 
-**Bagging (SVM) is configured as an SVM, not as a forest.** 50 estimators rather
-than 300, `probability` left off, `n_jobs=-1`. Enabling `probability` triggers a
-5-fold Platt-scaling CV *inside every base estimator*; nothing downstream needs
+Bagging (SVM) uses SVM-appropriate settings: 50 estimators instead of 300, `probability` left off, `n_jobs=-1`. Enabling `probability` triggers a
+5-fold Platt-scaling CV inside every base estimator, and nothing downstream needs
 calibrated probabilities, since the confusion matrices, the cascade and the decision
 boundaries all call `.predict`.
 
-**Permutation importance for the cross-model comparison.** Gini importance,
+Permutation importance for comparing models. Gini importance,
 regression coefficients and bagged-tree averages are not comparable to each other,
 and a bagged RBF SVM has none of them. Permutation importance on the held-out test
 set is computed identically for all four models; native importances are reported
 alongside as a cross-check.
 
-**Small samples are stated, not hidden.** Stage 2's held-out set is ~30 objects,
-~6 per subtype — a worst-case standard error near 9 percentage points, with
+Small samples. Stage 2's held-out set is ~30 objects, ~6 per subtype, which
+means a worst-case standard error near 9 percentage points, with
 per-subtype recall moving in steps of ~17 points. Balancing the dataset removed the
-*bias* from uneven attrition; it could not remove that variance. Repeated stratified
+bias from uneven attrition, but not that variance. Repeated stratified
 CV over the Stage 2 training partition is reported alongside the held-out number as
 the better-resolved estimate.
