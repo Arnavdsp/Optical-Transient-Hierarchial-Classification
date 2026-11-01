@@ -11,6 +11,57 @@ ALeRCE, plus TESS light curves via `lightkurve` for stellar flares. Four models 
 trained at each stage: Random Forest, Logistic Regression, Bagging (Trees) and
 Bagging (SVM).
 
+## v6 — SN sub-classification: more data, physical features, imbalance handled
+
+`notebooks/BTP_TNS_Hierarchical_v6.ipynb` is the v5 notebook with its outputs, plus a
+PART B that replaces Stage 2. Built by `tools/build_notebook_v6.py` from `btp6/`
+(tested by `tests6/`); `tools/validate_notebook_v6.py` executes PART B for real
+outside Colab.
+
+What changed, and why:
+
+- **Labels from three catalogues.** TNS + ZTF BTS + the Open Supernova Catalog
+  (sne.space). OSC events are kept only when all their claimed types agree, and a ZTF
+  id given different subtypes by different catalogues is dropped everywhere. The OSC
+  adds few objects beyond TNS (it aggregates TNS), but it cross-checks the labels.
+- **All of every rare class.** Ib, Ic and SLSN run until their pools are exhausted;
+  Ia and II are capped at 600. Objects per subtype: 600 / 92 / 179 / 600 / 185, against 30 each.
+  The imbalance is handled in the models (class weights, SMOTE inside the training
+  fold), not by throwing data away.
+- **A looser gate, measured.** The v4 gate's 60-day baseline rejected ~70 % of SNe Ia.
+  The v6 features are windowed and NaN-tolerant, so shorter light curves give missing
+  values rather than wrong ones. Whether each object passes the v4 gate is still recorded.
+- **Rest-frame physical features.** Timescales divided by (1+z); absolute peak
+  magnitude from the fitted curve's maximum, corrected for Milky Way extinction
+  (Schlafly & Finkbeiner 2011) and the (1+z) bandwidth term; g−r colour at fixed
+  rest-frame phases; decline rates; plateau and secondary-bump indicators; plus a
+  joint time × wavelength Gaussian process (Boone 2019, the PLAsTiCC winner), which
+  gives consistent colours when one band is sparse.
+- **4-way SESN scheme.** TNS files SN IIb under SN II, but IIb are stripped-envelope
+  SNe (Modjaz et al. 2019), and 15 of 22 were predicted Ib/c. Reported alongside,
+  not instead of, the TNS-label 4-way scheme.
+- **Evaluation.** Model choice by repeated stratified 5-fold CV on 80 % of the data,
+  then one score on an untouched 20 % test set (332 objects; v5 had 41).
+
+Results (run 2026-11-01, `results/v6/`):
+
+| scheme | v5 setup, CV | v6, CV | v6 test accuracy (95 % CI) | test balanced acc. | test accuracy, 80 % most confident |
+|---|---|---|---|---|---|
+| 3-way Ia / CCSN / SLSN | 0.903 | 0.932 | **0.946** (0.919–0.967) | 0.934 | 0.992 |
+| 4-way Ia / Ibc / II / SLSN | 0.770 | 0.855 | 0.831 (0.789–0.873) | 0.808 | 0.902 |
+| 4-way SESN (IIb with Ibc) | — | 0.870* | 0.828 (0.786–0.867) | 0.825 | 0.876 |
+| 5-way | 0.600 | 0.823 | 0.819 (0.780–0.858) | 0.713 | 0.929 |
+
+CV columns: rows A and F of the improvement ladder (same objects, repeated 5-fold CV,
+HistGB for F). *SESN has no ladder row; its number is the best model's CV on the
+training 80 %.
+
+What is left is SN II versus stripped-envelope. Spectroscopically those differ by
+hydrogen (and helium) lines, and in g and r photometry they overlap. The learning
+curve was still rising at the full sample (4-way SESN CV 0.805 / 0.831 / 0.857 at
+40 / 70 / 100 %), so more labelled SESNe, not a different model, is what would move it.
+Every model tried lands within ~1 point of the others.
+
 ## v5 — TNS vs ALeRCE ground truth
 
 `notebooks/BTP_TNS_Hierarchical_v5.ipynb` builds on the v4 pipeline (Villar fit,
