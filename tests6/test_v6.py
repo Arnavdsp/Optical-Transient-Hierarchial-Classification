@@ -164,3 +164,23 @@ def test_custom_models_work_with_sklearn_inspection():
         m.fit(X, yy)
         r = permutation_importance(m, X, yy, scoring='f1_macro', n_repeats=2, random_state=0)
         assert r.importances_mean[0] > r.importances_mean[1]
+
+
+def test_confidence_threshold_reaches_target_on_its_own_data():
+    from btp6.model import confidence_threshold, selective_report
+    rng = np.random.default_rng(0)
+    n = 400
+    classes = np.array(['a', 'b'])
+    conf = rng.uniform(0.5, 1.0, n)
+    y = rng.choice(classes, n)
+    # correct with probability equal to the confidence: a calibrated toy
+    right = rng.uniform(size=n) < conf
+    pred = np.where(right, y, np.where(y == 'a', 'b', 'a'))
+    prob = np.column_stack([np.where(pred == 'a', conf, 1 - conf), np.where(pred == 'b', conf, 1 - conf)])
+    thr, cov, acc = confidence_threshold(y, prob, classes, target=0.9)
+    assert acc >= 0.9 and 0 < cov < 1
+    # the bound makes the cut stricter than the point estimate alone
+    thr0, cov0, _ = confidence_threshold(y, prob, classes, target=0.9, delta=0.5)
+    assert cov <= cov0
+    rep = selective_report(y, prob, classes, thr)
+    assert abs(rep['coverage'] - cov) < 1e-9 and rep['accuracy'] >= 0.9

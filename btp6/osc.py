@@ -155,3 +155,47 @@ def union_pool(subtype, sources, require_redshift=True, random_state=42):
     for src, _ in sources:
         stats[src] = int(pool['source'].str.startswith(src).sum())
     return pool, stats
+
+
+def resolve_ztf_ids(frame, alerce, *, radius_arcsec=2.0, workers=8, survey_kwargs=None,
+                    cache_path=None):
+    """Fill `ztf_name` for rows that lack one, by ALeRCE cone search on (ra, declination).
+
+    TNS records the ZTF internal name only when ZTF (or a broker) reported the object;
+    many SNe classified from other surveys' discoveries are still in ZTF's footprint and
+    have a ZTF light curve. A 2" match is the radius v4's `resolve_oid` used. Results
+    (including misses) are cached so a re-run does not repeat the queries.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    survey_kwargs = survey_kwargs or {}
+    cache = {}
+    if cache_path:
+        try:
+            c = pd.read_csv(cache_path)
+            cache = dict(zip(c['name'], c['ztf_name']))
+        except (OSError, ValueError, KeyError):
+            cache = {}
+
+    def one(row):
+        name = row['name']
+        if name in cache:
+            return name, cache[name]
+        try:
+            o = alerce.query_objects(ra=float(row['ra']), dec=float(row['declination']),
+                                     radius=radius_arcsec, format='pandas', **survey_kwargs)
+            z = o['oid'].iloc[0] if len(o) and 'oid' in o else None
+        except Exception:
+            z = None
+        return name, z
+
+    need = frame[frame['ztf_name'].isna()]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        res = dict(ex.map(one, [r for _, r in need.iterrows()]))
+    cache.update(res)
+    if cache_path:
+        pd.DataFrame({'name': list(cache), 'ztf_name': list(cache.values())}).to_csv(cache_path, index=False)
+    out = frame.copy()
+    miss = out['ztf_name'].isna()
+    out.loc[miss, 'ztf_name'] = out.loc[miss, 'name'].map(res)
+    out['ztf_from_cone'] = miss & out['ztf_name'].notna()
+    return out

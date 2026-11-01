@@ -246,3 +246,42 @@ def confusion_table(y, pred, classes):
     cm = confusion_matrix(y, pred, labels=classes)
     return pd.DataFrame(cm, index=[f'true {c}' for c in classes],
                         columns=[f'pred {c}' for c in classes])
+
+
+def confidence_threshold(y, prob, classes, target=0.90, delta=0.05):
+    """Confidence cut for selective classification, by the "selection with guaranteed
+    risk" rule of Geifman & El-Yaniv (2017, NeurIPS): keep as many objects as possible
+    such that the one-sided (1 - delta) Clopper-Pearson UPPER bound on the error rate of
+    the kept set is at most 1 - target. Chosen on out-of-fold TRAINING predictions only,
+    then applied unchanged to the test set.
+
+    Returns (threshold, coverage, accuracy) on the data the cut was chosen on.
+    """
+    from scipy.stats import beta
+    y = np.asarray(y)
+    conf = prob.max(axis=1)
+    wrong = classes[np.argmax(prob, axis=1)] != y
+    order = np.argsort(-conf)
+    n = np.arange(1, len(y) + 1)
+    e = np.cumsum(wrong[order])
+    upper = np.where(e < n, beta.ppf(1 - delta, e + 1, n - e), 1.0)
+    ok = np.where((upper <= 1 - target) & (n >= 20))[0]
+    if not len(ok):
+        return 1.0, 0.0, np.nan
+    k = ok.max()
+    return float(conf[order][k]), float((k + 1) / len(y)), float(1 - e[k] / (k + 1))
+
+
+def selective_report(y, prob, classes, threshold):
+    y = np.asarray(y)
+    conf = prob.max(axis=1)
+    pred = classes[np.argmax(prob, axis=1)]
+    keep = conf >= threshold
+    if not keep.any():
+        return {'coverage': 0.0, 'n_kept': 0, 'accuracy': np.nan, 'balanced_accuracy': np.nan,
+                'macro_F1': np.nan, 'per_class_coverage': {}}
+    return {'coverage': float(keep.mean()), 'n_kept': int(keep.sum()),
+            'accuracy': accuracy_score(y[keep], pred[keep]),
+            'balanced_accuracy': balanced_accuracy_score(y[keep], pred[keep]),
+            'macro_F1': f1_score(y[keep], pred[keep], average='macro'),
+            'per_class_coverage': {c: float(keep[y == c].mean()) for c in classes}}

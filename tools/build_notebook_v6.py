@@ -81,9 +81,9 @@ v4 photometry, and replaces only the SN sub-classification.
 | SN label sources | TNS + BTS | TNS + BTS + **Open Supernova Catalog (sne.space, Harvard CfA)**, cross-source label conflicts removed |
 | Objects per subtype | 30 / 30 / 30 / 30 / 30 | every Ib, Ic and SLSN the catalogues can supply that survives the gate; Ia and II capped at 600 |
 | Light-curve gate | v4 QG (60-d baseline, 30 d post-peak) | same checks, coverage relaxed; v4-gate pass/fail kept per object and the effect measured |
-| Features | Villar parameters, observer frame, A-based peak magnitude | rest-frame timescales, curve-peak absolute magnitude with MW extinction and the (1+z) K-term, g-r colour at fixed rest-frame phases, decline rates, plateau and secondary-bump indicators, plus a joint 2-D (time x wavelength) Gaussian-process fit (Boone 2019) |
+| Features | Villar parameters, observer frame, A-based peak magnitude | rest-frame timescales, curve-peak absolute magnitude with MW extinction and the (1+z) K-term, g-r colour at fixed rest-frame phases, decline rates, plateau and secondary-bump indicators, plus a joint 2-D (time x wavelength) Gaussian-process fit (Boone 2019) and template matching against 66 real core-collapse SNe (Vincenzi 2019, CfA/CSP data) and SALT2 |
 | Imbalance | balanced by truncation at 30 | class-weighted models, in-fold majority capping and SMOTE compared, balanced accuracy and macro-F1 reported next to accuracy |
-| Evaluation | one 80/20 split, n_test = 41 | repeated stratified 5-fold CV for model choice, then one untouched 20 % test set |
+| Evaluation | one 80/20 split, n_test = 41 | repeated stratified 5-fold CV for model choice, then one untouched 20 % test set; plus a 90 % selective-classification operating point fixed on training data |
 
 Run order in Colab: run all of PART A once (or at least STEP 1 to STEP 3: setup, TNS,
 BTS and the photometry cell), then PART B. PART B checkpoints to Drive and resumes.
@@ -130,6 +130,8 @@ os.makedirs(V6_DIR, exist_ok=True)
 V6_TARGETS = {'SN_Ia': 600, 'SN_II': 600, 'SN_Ic': 5000, 'SN_Ib': 5000, 'SLSN': 5000}
 V6_WORKERS = 8          # parallel ALeRCE requests
 USE_ALERCE_FEATURES = False   # see the ALeRCE-features cell for why this is off
+USE_CONE_MATCH = True         # recover Ib / Ic / SLSN that TNS lists without a ZTF name
+TARGET_ACCURACY = 0.90        # for the selective-classification operating point
 CV_SPLITS, CV_REPEATS = 5, 2   # 10 held-out folds per number; raise for tighter error bars
 
 need = ['BASE_DIR', 'alerce', 'tns_full', 'classify_sn_subtype', 'fit_villar', 'villar',
@@ -150,6 +152,19 @@ print(f'OSC events: {len(osc_cat):,}; with a ZTF alias and one unambiguous subty
 print(osc_df['sn_subtype'].value_counts().to_string())
 
 tns_sn = tns_full[tns_full['sn_subtype'].notna() & tns_full['ztf_name'].notna()]
+if USE_CONE_MATCH:
+    # TNS records a ZTF name only when ZTF or a broker reported the object. For the
+    # three rare classes, objects discovered since ZTF began (2018-03), north of
+    # dec -30 and with a redshift, are matched to ALeRCE by a 2" cone search.
+    _cand = tns_full[tns_full['ztf_name'].isna() & tns_full['redshift'].notna()
+                     & (tns_full['declination'] > -30)
+                     & (pd.to_datetime(tns_full['discoverydate'], errors='coerce') >= '2018-03-01')
+                     & tns_full['sn_subtype'].isin(['SN_Ib', 'SN_Ic', 'SLSN'])]
+    _cone = resolve_ztf_ids(_cand, alerce, workers=V6_WORKERS, survey_kwargs=_survey_kwargs(),
+                            cache_path=os.path.join(V6_DIR, 'cone_matches.csv'))
+    _hit = _cone[_cone['ztf_name'].notna()]
+    print('recovered by cone search:', _hit['sn_subtype'].value_counts().to_dict())
+    tns_sn = pd.concat([tns_sn, _hit], ignore_index=True)
 sources = []
 if 'bts' in globals() and bts is not None and len(bts):
     sources.append(('BTS', bts[bts['sn_subtype'].notna()]))
@@ -195,6 +210,54 @@ print(f'\\nmajority : minority ratio  v6 = {_c.max() / _c.min():.1f} : 1   '
       f'(raw TNS = {tns_sn["sn_subtype"].value_counts().max() / tns_sn["sn_subtype"].value_counts().min():.0f} : 1)')
 '''))
 
+PART_B.append(module_cell('templates', 'v6 — template matching against real CfA/CSP SNe (Vincenzi 2019) and SALT2'))
+
+PART_B.append(code('''
+# ---- template-matching features -----------------------------------------------
+# ~3 s per object per CPU (66 core-collapse templates x 4 host reddenings + SALT2).
+# Parallel over Colab's CPUs and checkpointed to Drive every 100 objects.
+from concurrent.futures import ProcessPoolExecutor
+_tmpl_path = os.path.join(V6_DIR, 'template_features.csv')
+_bank = None
+def _tmpl_one(args):
+    global _bank
+    if _bank is None:
+        _bank = TemplateBank()
+    oid, label, z, ebv = args
+    try:
+        d = pd.read_csv(os.path.join(BASE_DIR, label.lower(), f'{oid}.csv'))
+        o = template_features(d, z, _bank, ebv)
+    except Exception:
+        o = {}
+    o['id'] = oid
+    return o
+
+# fetch every template file once in this process (sncosmo caches them on disk), so the
+# worker processes do not race each other downloading the same files
+_pre = TemplateBank()
+for _i in range(len(_pre.catalogue)):
+    _pre.curves(_i, 0.0, 0.05)
+tmpl = pd.read_csv(_tmpl_path) if os.path.exists(_tmpl_path) else pd.DataFrame(columns=['id'])
+_todo = sn_v6[~sn_v6['id'].isin(tmpl['id'])]
+print(f'template fits to run: {len(_todo)} objects on {os.cpu_count()} CPUs')
+_rows, t0 = [], time.time()
+with ProcessPoolExecutor(os.cpu_count()) as ex:
+    for o in ex.map(_tmpl_one, list(zip(_todo['id'], _todo['label'], _todo['redshift'], _todo['ebv'])),
+                    chunksize=8):
+        _rows.append(o)
+        if len(_rows) % 100 == 0:
+            tmpl = pd.concat([tmpl, pd.DataFrame(_rows)], ignore_index=True); _rows = []
+            tmpl.to_csv(_tmpl_path, index=False)
+            print(f'  {len(tmpl)} done, {time.time() - t0:.0f} s', flush=True)
+tmpl = pd.concat([tmpl, pd.DataFrame(_rows)], ignore_index=True)
+tmpl.to_csv(_tmpl_path, index=False)
+sn_v6 = sn_v6.drop(columns=[c for c in TEMPLATE_FEATURES if c in sn_v6]).merge(
+    tmpl[['id'] + TEMPLATE_FEATURES], on='id', how='left')
+print('objects with a template fit:', int(sn_v6['tmpl_lchi2_II'].notna().sum()), '/', len(sn_v6))
+print('\\nmedian log10 reduced chi^2 of the best template, by true class (lower = better fit):')
+print(sn_v6.groupby('label')[[f'tmpl_lchi2_{c}' for c in TEMPLATE_CLASSES]].median().round(2).to_string())
+'''))
+
 PART_B.append(module_cell('alerce_features', 'v6 — optional ALeRCE light-curve feature block'))
 
 PART_B.append(code('''
@@ -232,21 +295,21 @@ V4_COLS = [c for c in LIGHTCURVE_COLS + PHYSICAL_COLS]
 
 # v4 feature rows for the v4-gate objects, from the same CSVs, with v4's own function
 v4_path = os.path.join(V6_DIR, 'v4_rows_for_v6_objects.csv')
-if os.path.exists(v4_path):
-    v4_rows = pd.read_csv(v4_path)
-else:
-    _rows = []
-    for r in sn_v6[sn_v6['passes_v4_gate']].itertuples():
-        row = process_ztf_object(os.path.join(BASE_DIR, r.label.lower(), f'{r.id}.csv'),
-                                 r.id, r.label, redshift=r.redshift)
-        if row:
-            _rows.append(row)
-    v4_rows = pd.DataFrame(_rows)
+v4_rows = pd.read_csv(v4_path) if os.path.exists(v4_path) else pd.DataFrame(columns=['id'])
+_rows = []
+for r in sn_v6[sn_v6['passes_v4_gate'] & ~sn_v6['id'].isin(v4_rows['id'])].itertuples():
+    row = process_ztf_object(os.path.join(BASE_DIR, r.label.lower(), f'{r.id}.csv'),
+                             r.id, r.label, redshift=r.redshift)
+    if row:
+        _rows.append(row)
+if _rows:
+    v4_rows = pd.concat([v4_rows, pd.DataFrame(_rows)], ignore_index=True)
     v4_rows.to_csv(v4_path, index=False)
+v4_rows = v4_rows[v4_rows['id'].isin(sn_v6['id'])].reset_index(drop=True)   # this run's objects only
 both = v4_rows.set_index('id')[V4_COLS + ['label']].join(
     sn_v6.set_index('id')[V6_FEATURES], how='inner', rsuffix='_v6').reset_index()
 V6_IN_BOTH = [c + '_v6' if c in V4_COLS else c for c in V6_FEATURES]
-FEATS = V6_FEATURES + GP_FEATURES + AL_COLS
+FEATS = V6_FEATURES + GP_FEATURES + TEMPLATE_FEATURES + AL_COLS
 
 rf_v5 = make_pipeline(SimpleImputer(strategy='median'),
                       RandomForestClassifier(n_estimators=300, random_state=RANDOM_STATE, n_jobs=-1))
@@ -260,7 +323,8 @@ LADDER = [
     ('C  + v6 features (same objects as B)',              both,   V6_IN_BOTH,        rf_v5),
     ('D  + relaxed gate (all v6 objects)',                sn_v6,  V6_FEATURES,       rf_v5),
     ('E  + class-weighted gradient boosting',             sn_v6,  V6_FEATURES + AL_COLS, zoo['HistGB (balanced)']),
-    ('F  + joint 2-D GP features',                        sn_v6,  FEATS,             zoo['HistGB (balanced)']),
+    ('F  + joint 2-D GP features',                        sn_v6,  V6_FEATURES + GP_FEATURES + AL_COLS, zoo['HistGB (balanced)']),
+    ('G  + template-matching features',                   sn_v6,  FEATS,             zoo['HistGB (balanced)']),
 ]
 ladder_rows = []
 for scheme in ['5-way', '4-way', '3-way']:
@@ -286,7 +350,7 @@ for ax, scheme in zip(axes, ['5-way', '4-way', '3-way']):
     ax.set_xticks(x); ax.set_xticklabels([s.split()[0] for s in d['step']])
     ax.set_title(scheme); ax.set_ylim(0.4, 1.0)
 axes[0].legend(loc='lower right'); axes[0].set_ylabel('CV score')
-plt.suptitle('v6 improvement ladder (steps A to F, see the table above)'); plt.tight_layout(); plt.show()
+plt.suptitle('v6 improvement ladder (steps A to G, see the table above)'); plt.tight_layout(); plt.show()
 '''))
 
 PART_B.append(md('''
@@ -359,7 +423,7 @@ def bootstrap_ci(y, p, fn, n=2000, seed=0):
     v = [fn(y[i], p[i]) for i in (rng.integers(0, len(y), len(y)) for _ in range(n))]
     return np.percentile(v, [2.5, 97.5])
 
-final_rows, final_models, coverage = [], {}, {}
+final_rows, final_models, coverage, selective_rows = [], {}, {}, []
 fig, axes = plt.subplots(1, 4, figsize=(22, 4.8))
 for ax, scheme in zip(axes, SCHEMES_RUN):
     s, tr, te = splits[scheme]
@@ -379,6 +443,19 @@ for ax, scheme in zip(axes, SCHEMES_RUN):
                        'test_balanced_acc': balanced_accuracy_score(y[te], pred),
                        'test_macro_F1': f1_score(y[te], pred, average='macro')})
     coverage[scheme] = coverage_curve(y[te], prob, cls)
+    # selective classification: the confidence cut is chosen on out-of-fold
+    # predictions over the TRAINING 80 % only, then applied once to the test set.
+    # Rule: Geifman & El-Yaniv (2017) -- the 95 % upper bound on the kept set's error
+    # must be within the target, so the cut has a margin for sampling noise.
+    oof = cross_validate(mdl, X[tr], y[tr], n_splits=CV_SPLITS, n_repeats=1, return_oof=True,
+                         random_state=RANDOM_STATE, **kw)
+    thr, cov_tr, acc_tr = confidence_threshold(y[tr], oof['oof_prob'], oof['classes'], TARGET_ACCURACY)
+    rep = selective_report(y[te], prob, cls, thr)
+    selective_rows.append({'scheme': scheme, 'threshold (from train)': round(thr, 3),
+                           'train-CV coverage': cov_tr, 'train-CV accuracy': acc_tr,
+                           'TEST coverage': rep['coverage'], 'TEST accuracy': rep['accuracy'],
+                           'TEST balanced acc': rep['balanced_accuracy'], 'TEST macro-F1': rep['macro_F1'],
+                           **{f'kept {c}': v for c, v in rep['per_class_coverage'].items()}})
     cm = confusion_table(y[te], pred, cls)
     norm = cm.values / cm.values.sum(1, keepdims=True)
     ax.imshow(norm, cmap='Blues', vmin=0, vmax=1)
@@ -396,6 +473,12 @@ display(final.round(3))
 for scheme, cc in coverage.items():
     print(f'\\n{scheme} — accuracy on the most confident fraction of the test set')
     print(cc.round(3).to_string(index=False))
+selective = pd.DataFrame(selective_rows)
+selective.to_csv(os.path.join(V6_DIR, 'selective_classification.csv'), index=False)
+print(f'\\nSelective classification at a {TARGET_ACCURACY:.0%} accuracy target. The cut is fixed on the '
+      'training data; the TEST columns are the honest out-of-sample result. Objects below the '
+      'cut are the ones to send for a spectrum.')
+display(selective.round(3))
 '''))
 
 PART_B.append(code('''
@@ -421,10 +504,12 @@ for scheme in SCHEMES_RUN:
     cc = coverage[scheme]
     c80 = cc[cc.kept_fraction == 0.8].iloc[0]
     cv = (f'CV accuracy {a.accuracy.iloc[0]:.3f} (v5 setup) -> {a.accuracy.iloc[-1]:.3f} (v6); ' if len(a) else '')
+    sv = selective[selective.scheme == scheme].iloc[0]
     L.append(f'**{scheme}**: {cv}'
              f'held-out test with {f.model}: accuracy {f.test_accuracy:.3f} (95 % CI {f.acc_95CI}), '
-             f'balanced accuracy {f.test_balanced_acc:.3f}, macro-F1 {f.test_macro_F1:.3f}; '
-             f'on the 80 % most confident test objects: accuracy {c80.accuracy:.3f}.\\n')
+             f'balanced accuracy {f.test_balanced_acc:.3f}, macro-F1 {f.test_macro_F1:.3f}. '
+             f'With the {TARGET_ACCURACY:.0%} confidence cut fixed on training data: test accuracy '
+             f'{sv["TEST accuracy"]:.3f} on {sv["TEST coverage"]:.0%} of test objects.\\n')
 L.append('Caveat on redshift: redshift and absolute magnitude are legitimate physical features, '
          'but part of their power is the selection function of spectroscopic follow-up (SLSNe '
          'are found far away, Ib/c nearby). v5 STEP 11 measured this; it applies to any '
