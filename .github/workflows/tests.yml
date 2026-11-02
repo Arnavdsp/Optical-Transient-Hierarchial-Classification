@@ -52,3 +52,7 @@ jobs:
 
       - name: Execute the v5 notebook offline, end to end
         run: python tools/validate_notebook_v5.py
+
+      # ---- v6 (btp6/, tests6/) --------------------------------------------------
+      - name: v6 test suite
+        run: python -m pytest tests6/ -q
