@@ -569,6 +569,14 @@ plot_decision_boundaries(sn_df, sn_train_local, sn_test_local, 'label', top2_s2,
 plt.show()
 '''))
 A(code('''
+# What do the features actually measure? Structural checks on the real table:
+# exact collinearity between feature pairs, and how much of the "timescale"
+# features is really observing baseline rather than transient physics.
+diagnostics = feature_diagnostics(feature_df, FEATURES)
+print(format_feature_diagnostics(diagnostics))
+'''))
+
+A(code('''
 # Data-side separability — independent of any model — and the physics table.
 print('Feature separability, Stage 1 (between-class variance / within-class variance):')
 display(class_separation_ranking(feature_df, 'coarse_label', FEATURES).round(3))
@@ -600,7 +608,8 @@ from IPython.display import Markdown
 summary_md = build_results_markdown(
     count_report, split, stage1, stage2a, stage2b, comparison,
     perm_s1, perm_s2, misclass_s1, misclass_s2, recall_s1, recall_s2,
-    res_s1, res_s2, repeated_cv_s2=repeated_cv_s2, feature_df=feature_df)
+    res_s1, res_s2, repeated_cv_s2=repeated_cv_s2, feature_df=feature_df,
+    diagnostics=diagnostics)
 
 with open(os.path.join(FEATURE_DIR, 'results_summary.md'), 'w') as f:
     f.write(summary_md)

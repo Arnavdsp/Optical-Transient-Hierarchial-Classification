@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy pandas scikit-learn matplotlib scipy joblib pytest ipython
+          pip install numpy pandas scikit-learn matplotlib scipy joblib pytest ipython astropy tabulate
 
       - name: Scan for committed credentials
         run: python -m pytest tests/test_no_secrets.py -q
@@ -37,3 +37,18 @@ jobs:
 
       - name: Execute the notebook's Phase 3/4 cells offline
         run: python tools/validate_notebook.py
+
+      # ---- v5 (btp5/, tests5/) --------------------------------------------------
+      # sncosmo is deliberately not installed: augmentation must fall back to the
+      # Hogg et al. (2002) K-correction cleanly when it is absent, and this proves it.
+      - name: v5 test suite
+        run: python -m pytest tests5/ -q
+
+      - name: Verify the v5 notebook matches the modules it is built from
+        run: |
+          python tools/build_notebook_v5.py
+          git diff --exit-code -- notebooks/BTP_TNS_Hierarchical_v5.ipynb \
+            || (echo "::error::the v5 notebook is out of date — run tools/build_notebook_v5.py and commit the result" && exit 1)
+
+      - name: Execute the v5 notebook offline, end to end
+        run: python tools/validate_notebook_v5.py

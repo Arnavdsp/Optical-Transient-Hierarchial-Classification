@@ -1,0 +1,10 @@
+level,class,count,target,shortfall
+coarse,AGN,125,150,25
+coarse,SNe,150,150,0
+coarse,TDE,124,150,26
+coarse,stellar_flare,150,150,0
+subtype,SN_Ia,30,30,0
+subtype,SN_Ib,30,30,0
+subtype,SN_Ic,30,30,0
+subtype,SN_II,30,30,0
+subtype,SLSN,30,30,0

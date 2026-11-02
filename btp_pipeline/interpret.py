@@ -243,3 +243,109 @@ def class_separation_ranking(feature_df, label_col, features):
                      'mean_within_class_var': float(within),
                      'separation_ratio': float(between / within) if within else np.nan})
     return pd.DataFrame(rows).sort_values('separation_ratio', ascending=False).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------
+# Feature-construction diagnostics
+# --------------------------------------------------------------------------
+
+def feature_diagnostics(feature_df, features, survey_col='survey'):
+    """
+    Check what the features actually measure, as opposed to what they are named.
+
+    Two problems in this feature set were found only by looking at the real
+    numbers, and both are properties of how the features are *constructed*, so
+    they will recur on any re-run until the extractor changes:
+
+    1. **Redundancy.** `process_ztf_object` sets the flux baseline to the faintest
+       magnitude in the light curve, so relative flux has a minimum of exactly 1.0
+       for every ZTF object. `amplitude = peak - min` is then identically
+       `peak_val - 1`: the two columns are the same feature twice, and the ZTF part
+       of the dataset really has five features, not six.
+
+    2. **Timescales are observing baselines.** `extract_shape_features` measures
+       rise and decay across the whole interpolated light curve, so for an object
+       with years of archival ZTF coverage `rise_time` is "time from the first
+       archival detection to peak", not the photometric rise of the transient. That
+       quantity correlates with class through the observing strategy rather than
+       the astrophysics — persistently variable AGN accumulate long histories,
+       while TESS flares are capped at the ~27-day sector length.
+
+    Returns a dict of measured evidence; it asserts nothing on its own.
+    """
+    out = {'collinear_pairs': [], 'baseline': {}}
+
+    # 1. exact linear dependence between feature pairs, per survey
+    surveys = ([None] if survey_col not in feature_df else
+               list(pd.unique(feature_df[survey_col])))
+    for sv in surveys:
+        sub = feature_df if sv is None else feature_df[feature_df[survey_col] == sv]
+        if len(sub) < 3:
+            continue
+        for i, a in enumerate(features):
+            for b in features[i + 1:]:
+                diff = (sub[a] - sub[b]).round(9)
+                r = sub[a].corr(sub[b])
+                if diff.nunique() == 1:
+                    out['collinear_pairs'].append({
+                        'survey': sv, 'feature_a': a, 'feature_b': b,
+                        'relation': f'{a} = {b} + {float(diff.iloc[0]):.6g}',
+                        'pearson_r': float(r), 'n': int(len(sub)),
+                    })
+
+    # 2. how much of the "timescale" is really observing baseline
+    if {'rise_time', 'decay_time'}.issubset(feature_df.columns):
+        span = feature_df['rise_time'] + feature_df['decay_time']
+        out['baseline'] = {
+            'median_days': float(span.median()),
+            'max_days': float(span.max()),
+            'frac_over_1yr': float((span > 365).mean()),
+            'frac_over_3yr': float((span > 1095).mean()),
+            'by_class': feature_df.assign(_span=span).groupby('label')['_span']
+                        .median().sort_values(ascending=False).to_dict(),
+        }
+    return out
+
+
+def format_feature_diagnostics(diag):
+    """Render `feature_diagnostics` output as markdown for the results summary."""
+    lines = ['\n## Feature-construction issues found in the real data\n']
+    pairs = diag.get('collinear_pairs', [])
+    if pairs:
+        lines.append("**Two features are one feature.** Measured on the real table:\n")
+        for p in pairs:
+            lines.append(f"- On {p['survey']} objects (n={p['n']}): `{p['relation']}`, "
+                         f"Pearson r = {p['pearson_r']:.6f}.")
+        lines.append(
+            "\nThis is structural, not a coincidence: `process_ztf_object` uses the faintest "
+            "magnitude as the flux baseline, so relative flux bottoms out at exactly 1.0 and "
+            "`amplitude = peak - min` reduces to `peak_val - 1`. The ZTF half of the dataset "
+            "therefore carries five independent features, not six. Nothing here is *wrong* — "
+            "the models are not harmed by a duplicated column — but any statement of the form "
+            "'peak brightness and amplitude both matter' is counting one quantity twice, and "
+            "their permutation importances should be read as a single shared contribution.\n")
+    b = diag.get('baseline') or {}
+    if b:
+        lines.append("**`rise_time` and `decay_time` partly measure the observing baseline, "
+                     "not the transient.**\n")
+        lines.append(f"- Median interpolated span: {b['median_days']:.0f} days; "
+                     f"longest: {b['max_days']:.0f} days.")
+        lines.append(f"- {100 * b['frac_over_1yr']:.1f}% of objects span more than a year, "
+                     f"{100 * b['frac_over_3yr']:.1f}% more than three years.")
+        lines.append("- Median span by class: " + ', '.join(
+            f"{k} {v:.0f} d" for k, v in list(b['by_class'].items())))
+        lines.append(
+            "\nA supernova rises in roughly 10-30 days, so a span of years is archival "
+            "coverage of the position, not the event. `extract_shape_features` measures "
+            "across the whole interpolated curve, so for objects with long ZTF histories "
+            "these columns encode how long the field has been monitored. That correlates "
+            "with class through observing strategy rather than physics: persistently "
+            "variable AGN accumulate the longest histories, while TESS flares are capped "
+            "at the ~27-day sector length. Some of Stage 1's separability on these features "
+            "is therefore survey signature.\n"
+            "\n**The fix**, if you want these features to mean what they are named: window "
+            "the light curve around the detected peak (say peak minus 50 days to peak plus "
+            "150 days) before fitting the GP, and measure rise and decay inside that window. "
+            "That is a change to `extract_shape_features` / `process_ztf_object`, which this "
+            "rebuild deliberately left untouched, so it is flagged rather than applied.\n")
+    return '\n'.join(lines)
